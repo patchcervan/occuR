@@ -33,6 +33,7 @@ make_smoothing_matrix <- function(gm) {
 #' Compute design and smoothing matrices from formulae
 #'
 #' @param forms list of formulae for psi and p
+#' @param re list with character vectors of random effects variables for psi and p
 #' @param site_data see fit_occu function
 #' @param visit_data see fit_occu function
 #'
@@ -44,26 +45,71 @@ make_smoothing_matrix <- function(gm) {
 #' @importFrom mgcv gam uniquecombs
 #' @importFrom mgcv predict.gam
 #' @importFrom methods as
-make_matrices <- function(forms, visit_data, site_data) {
-  ## occupancy model
+#' @importFrom stats terms reformulate
+make_matrices <- function(forms, re, visit_data, site_data) {
+
+    ## occupancy model
   site_data$psi <- 1:nrow(site_data)
   gam_psi <- gam(forms[["psi"]], data = site_data, method = "REML")
-  site_data <- site_data[, psi := NULL]
+
   # get design matrix
   Xfull <- predict(gam_psi, newdata = site_data, type = "lpmatrix")
-  X_psi <- uniquecombs(Xfull)
+
+  if(length(re[[1]]) > 0){
+      # Add random effects
+      Xre <- model.matrix(as.formula(paste("psi ~", paste(re[[1]], collapse = "+"))),
+                          data = site_data,
+                          contrasts.arg = lapply(site_data[, re[[1]], with = FALSE],
+                                                 contrasts, contrasts = FALSE))
+      Xfull <- cbind(Xfull, Xre[,-1])
+      U_psi_n <- sapply(site_data[, re[[1]], with = FALSE], nlevels)
+      X_psi <- uniquecombs(Xfull)
+      U_psi <- X_psi[,tail(seq_len(ncol(Xfull)), sum(U_psi_n))]
+      attr(U_psi, "index") <- attr(X_psi, "index")
+      X_psi <- X_psi[,-tail(seq_len(ncol(Xfull)), sum(U_psi_n))]
+      attr(X_psi, "index") <- attr(U_psi, "index")
+  } else {
+      X_psi <- uniquecombs(Xfull)
+      U_psi_n <- 0
+      U_psi <-  matrix(0, ncol = 1, nrow = 1) # this could be any matrix of one column
+  }
+
+  site_data <- site_data[, psi := NULL]
+
   # get smoothing matrix
   S_psi <- make_smoothing_matrix(gam_psi)
 
   ## detection model
   visit_data$p <- 1:nrow(visit_data)
   gam_p <- gam(forms[["p"]], data = visit_data, method = "REML")
-  visit_data <- visit_data[, p := NULL]
+
   # get design matrix
   Xfull <- predict(gam_p, newdata = visit_data, type = "lpmatrix")
-  X_p <- uniquecombs(Xfull)
+
+  # Add random effects
+  if(length(re[[2]]) > 0){
+      Xre <- model.matrix(as.formula(paste("p ~", paste(re[[2]], collapse = "+"))),
+                          data = visit_data,
+                          contrasts.arg = lapply(visit_data[, re[[2]], with = FALSE],
+                                                 contrasts, contrasts = FALSE))
+      Xfull <- cbind(Xfull, Xre[,-1])
+      U_p_n <- sapply(visit_data[, re[[2]], with = FALSE], nlevels)
+      X_p <- uniquecombs(Xfull)
+      U_p <- X_p[, tail(seq_len(ncol(Xfull)), sum(U_p_n))]
+      attr(U_p, "index") <- attr(X_p, "index")
+      X_p <- X_p[, -tail(seq_len(ncol(Xfull)), sum(U_p_n))]
+      attr(X_p, "index") <- attr(U_p, "index")
+  } else {
+      X_p <- uniquecombs(Xfull)
+      U_p_n <- 0
+      U_p <- matrix(0, ncol = 1, nrow = 1) # this could be any matrix of one column
+  }
+
+  visit_data <- visit_data[, p := NULL]
+
   # get smoothing matrix
   S_p <- make_smoothing_matrix(gam_p)
+
 
   ## results
   res <- list(X_psi = X_psi,
@@ -73,7 +119,11 @@ make_matrices <- function(forms, visit_data, site_data) {
               S_p = S_p,
               nfix_p = gam_p$nsdf,
               gam_p = gam_p,
-              gam_psi = gam_psi)
+              gam_psi = gam_psi,
+              U_psi = as(U_psi, "sparseMatrix"),
+              U_p = as(U_p, "sparseMatrix"),
+              U_psi_n = U_psi_n,
+              U_p_n = U_p_n)
 
   return(res)
 }
@@ -89,7 +139,8 @@ make_matrices <- function(forms, visit_data, site_data) {
 #' @export
 #' @importFrom data.table uniqueN
 #' @importFrom TMB MakeADFun sdreport normalize
-#' @useDynLib occu_tmb
+#' @importFrom stats terms reformulate
+#' @useDynLib occu_tmb_re
 fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
   ## DATA
   # order data
@@ -105,13 +156,34 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
   nvis <- visit_data[, .(totsite = sum(obs), nvisit = .N), .(site, occasion)]
   totsite <- nvis$totsite
   nvisit <- nvis$nvisit
+  nobs <- nrow(visit_data)
+
+  ## Extract random effects from model formulas
+  re <- lapply(lapply(forms, terms), labels)
+  which_re <- lapply(re, function(x) grep("\\|", x))
+  re <- lapply(re, function(x) x[grep("\\|", x)])
+  re <- lapply(re, function(x) gsub(" ", "", x)) # remove spaces
+  re <- lapply(re, function(x) gsub("*.\\|", "", x))
+
+  re_vals <- list(psi = NULL,
+                  p = NULL)
+
+  for(i in seq_along(forms)){
+      if(length(which_re[[i]]) != 0){
+          tt <- labels(terms(forms[[i]]))[-which_re[[i]]]
+          forms[[i]] <- reformulate(tt,
+                                    response = c("psi", "p")[i],
+                                    intercept = attr(terms(forms[[i]]), "intercept"))
+      }
+  }
 
   ## MODEL MATRICES
   # name formulae
   names(forms) <- c(as.character(forms[[1]][[2]]),
                     as.character(forms[[2]][[2]]))
+
   # get model matrices and smoothing matrices
-  mats <- make_matrices(forms, visit_data, site_data)
+  mats <- make_matrices(forms, re, visit_data, site_data)
 
   ## SETUP DATA FOR TMB
   tmb_dat <- list(flag = 1L,
@@ -127,7 +199,11 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
                   X_p = mats$X_p,
                   p_ind = attr(mats$X_p, "index") - 1,
                   S_p = mats$S_p$S,
-                  S_p_n = as.integer(mats$S_p$Scols))
+                  S_p_n = as.integer(mats$S_p$Scols),
+                  U_psi = mats$U_psi,
+                  U_p = mats$U_p,
+                  U_psi_n = mats$U_psi_n,
+                  U_p_n = mats$U_p_n)
 
   ## PARAMETERS
   map <- list()
@@ -135,6 +211,8 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
   # fixed effects
   beta_psi <- rep(0, mats$nfix_psi)
   beta_p <- rep(0, mats$nfix_p)
+
+
   if (!is.null(start)) {
     len <- min(length(start$beta_psi), beta_psi)
     beta_psi[1:len] <- start$beta_psi[1:len]
@@ -167,6 +245,29 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
     log_lambda_p <- rep(0, length(tmb_dat$S_p_n))
     random <- c(random, "z_p")
   }
+
+  # Initial values for occupancy random effects
+  if(tmb_dat$U_psi_n[1] == 0){
+      gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
+      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
+      map <- c(map, list(gamma_psi = as.factor(NA), lsig_U_psi = as.factor(NA)))
+  } else {
+      gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
+      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
+      random <- c(random, "gamma_psi")
+  }
+
+  # Initial values for detection random effects
+  if(tmb_dat$U_p_n[1] == 0){
+      gamma_p <- rep(0, ncol(tmb_dat$U_p))
+      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
+      map <- c(map, list(gamma_p = as.factor(NA), lsig_U_p = as.factor(NA)))
+  } else {
+      gamma_p <- rep(0, ncol(tmb_dat$U_p))
+      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
+      random <- c(random, "gamma_p")
+  }
+
   if (length(map) < 1) map <- NULL
 
   ## SETUP PARAMETERS FOR TMB
@@ -175,14 +276,20 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
                   z_psi = z_psi,
                   z_p = z_p,
                   log_lambda_psi = log_lambda_psi,
-                  log_lambda_p = log_lambda_p)
+                  log_lambda_p = log_lambda_p,
+                  gamma_psi = gamma_psi,
+                  gamma_p = gamma_p,
+                  lsig_U_psi = lsig_U_psi,
+                  lsig_U_p = lsig_U_p)
 
   ## CREATE MODEL OBJECT
+  # compile("../occuR/src/occu_tmb_re.cpp")
+  # dyn.load(dynlib("../occuR/src/occu_tmb_re"))
   oo <- MakeADFun(data = tmb_dat,
                   parameters = tmb_par,
                   map = map,
                   random = random,
-                  DLL = "occu_tmb",
+                  DLL = "occu_tmb_test",
                   silent = !print)
 
   ## NORMALIZE

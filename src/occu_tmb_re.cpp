@@ -1,4 +1,4 @@
-// Author: Richard Glennie (updated Pachi Cervantes to add random effects in Jan 2023)
+// Author: Richard Glennie (Pachi Cervantes added non-spline random effects in Jan 2023)
 // Date: Feb 2020
 // Occupancy model
 
@@ -29,30 +29,28 @@ Type objective_function<Type>::operator() ()
   DATA_SPARSE_MATRIX(S_p); // detection smoothing matrix
   DATA_IVECTOR(S_p_n); // detection dimension of smoothing matrix
 
-  DATA_INTEGER(nobs);  // total number of observations
-  DATA_IVECTOR(u_psi);  // Levels of random effects for occupancy
-  DATA_IVECTOR(u_p);  // Levels of random effects for detection
+  DATA_IVECTOR(U_psi_n); // Number of levels of occupancy random effects
+  DATA_SPARSE_MATRIX(U_psi);  // Design matrix of random effects for occupancy
+  DATA_IVECTOR(U_p_n); // Number of levels of detection random effects
+  DATA_SPARSE_MATRIX(U_p);  // Design matrix of random effects for detection
+
 
   // PARAMETERS
   PARAMETER_VECTOR(beta_psi); // fixed effects for occupancy
   PARAMETER_VECTOR(beta_p); // fixed effects for detection
-  PARAMETER_VECTOR(z_psi); // random effects for occupancy (splines)
-  PARAMETER_VECTOR(z_p); // random effects for detection (splines)
+  PARAMETER_VECTOR(z_psi); // random effects for occupancy
+  PARAMETER_VECTOR(z_p); // random effects for detection
   PARAMETER_VECTOR(log_lambda_psi); // log smoothing parameter for occupancy
   PARAMETER_VECTOR(log_lambda_p); // log smoothing parameter for detection
-
-  PARAMETER_VECTOR(g_psi); // random effects for occupancy
-  PARAMETER_VECTOR(g_p);   // random effects for detection
-  PARAMETER(lsig_g_psi);  // log random effects sd for occupancy
-  PARAMETER(lsig_g_p);  // log random effects sd for detection
+  PARAMETER_VECTOR(gamma_psi);   // random effects for occupancy
+  PARAMETER_VECTOR(gamma_p);   // random effects for detection
+  PARAMETER_VECTOR(lsig_U_psi); // log standard deviation for occupancy random effects
+  PARAMETER_VECTOR(lsig_U_p);  // log standard deviation for detection random effects
 
   vector<Type> lambda_psi = exp(log_lambda_psi); // smoothing parameter for occupancy
   vector<Type> lambda_p = exp(log_lambda_p); // smoothing parameter  for detection
-
-  Type sig_g_psi = exp(lsig_g_psi); //random effects sd for occupancy
-  Type sig_g_p = exp(lsig_g_p); // random effects sd for detection
-  int nlevels_psi = g_psi.size();  // define the number of factor levels for occupancy random effects
-  int nlevels_p = g_p.size();  // define the number of factor levels for detection random effects
+  vector<Type> sig_U_psi = exp(lsig_U_psi);  // standard deviation for occupancy random effects
+  vector<Type> sig_U_p = exp(lsig_U_p);  // standard deviation for occupancy random effects
 
   // NEGATIVE-LOG-LIKELIHOOD
   Type nll = 0;
@@ -80,52 +78,70 @@ Type objective_function<Type>::operator() ()
       s0 += sn;
     }
   }
+
+
+  // RANDOM EFFECTS
+  //  Occupancy
+  int cc = 0;
+  if(U_psi_n(0) > 0){
+      for(int i = 0; i < U_psi_n.size(); ++i){
+          for(int j = 0; j < U_psi_n(i); ++j){
+              nll -= dnorm(gamma_psi(cc), Type(0.0), sig_U_psi(i));
+              cc += 1;
+          }
+      }
+  }
+
+  //  Detection
+  int dd = 0;
+  if(U_p_n(0) > 0){
+      for(int i = 0; i < U_p_n.size(); ++i){
+          for(int j = 0; j < U_p_n(i); ++j){
+              nll -= dnorm(gamma_p(dd), Type(0.0), sig_U_p(i));
+              dd += 1;
+          }
+      }
+  }
+
+
   // return un-normalized density for flag
   if (flag == 0) return nll;
 
-  // RANDOM EFFECTS
-  // Occupancy
-  int k;
-  vector<Type> re_psi;
-  if(nlevels_psi > 0){
-      for(int j = 0; j < nlevels_psi; j++){
-          nll -= dnorm(g_psi(j), Type(0.0), sig_g_psi, true);
-      }
-      for(int i = 0; i < nobs; i++){
-          k = u_psi(i) - 1;
-          re_psi(i) = g_psi(k);
-      }
-  }
-
-  // Detection
-  vector<Type> re_p;
-  if(nlevels_p > 0){
-      for(int j = 0; j < nlevels_p; j++){
-          nll -= dnorm(g_p(j), Type(0.0), sig_g_p, true);
-      }
-      for(int i = 0; i < nobs; i++){
-          k = u_p(i) - 1;
-          re_p(i) = g_p(k);
-      }
-  }
-
   // LINEAR PREDICTORS
+  // Occupancy
+  // Fixed effects
   matrix<Type> X_psiL = X_psi.leftCols(beta_psi.size());
-  vector<Type> logit_psi = X_psiL * beta_psi + re_psi;
+  vector<Type> logit_psi = X_psiL * beta_psi;
 
+  // Random effects
+  if(U_psi_n(0) > 0){
+      logit_psi += U_psi * gamma_psi;
+  }
+
+  // Splines
   if (S_psi_n(0) > 0) {
     matrix<Type> X_psiR = X_psi.rightCols(z_psi.size());
     logit_psi += X_psiR * z_psi;
   }
+
   vector<Type> psi = invlogit(logit_psi);
 
+  // Detection
+  // Fixed effects
   matrix<Type> X_pL = X_p.leftCols(beta_p.size());
-  vector<Type> logit_p = X_pL  * beta_p + re_p;
+  vector<Type> logit_p = X_pL  * beta_p;
 
+  // Random effects
+  if(U_p_n(0) > 0){
+      logit_p += U_p * gamma_p;
+  }
+
+  // Splines
   if (S_p_n(0) > 0) {
     matrix<Type> X_pR = X_p.rightCols(z_p.size());
     logit_p += X_pR * z_p;
   }
+
   vector<Type> p = invlogit(logit_p);
 
   // LIKELIHOOD
