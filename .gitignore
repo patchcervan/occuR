@@ -40,6 +40,6 @@ vignettes/*.pdf
 .Rproj.user
 
 # Compiling variables
-src\*.o$
-src\*.so$
-src\*.dll$
+src/*.o$
+src/*.so$
+src/*.dll$
