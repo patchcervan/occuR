@@ -1,7 +1,7 @@
-all: occu_tmb.dll
+all: occu_tmb_re.dll
 
-occu_tmb.dll: occu_tmb.cpp
-	Rscript --vanilla -e "TMB::compile('occu_tmb.cpp','-O0 -g', safebounds=FALSE)"
-	
+occu_tmb_re.dll: occu_tmb_re.cpp
+	Rscript --vanilla -e "TMB::compile('occu_tmb_re.cpp','-O0 -g', safebounds=FALSE)"
+
 clean:
-	rm -rf *o 
+	rm -rf *o
