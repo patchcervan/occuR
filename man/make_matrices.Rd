@@ -4,10 +4,12 @@
 \alias{make_matrices}
 \title{Compute design and smoothing matrices from formulae}
 \usage{
-make_matrices(forms, visit_data, site_data)
+make_matrices(forms, re, visit_data, site_data)
 }
 \arguments{
 \item{forms}{list of formulae for psi and p}
+
+\item{re}{list with character vectors of random effects variables for psi and p}
 
 \item{visit_data}{see fit_occu function}
 
