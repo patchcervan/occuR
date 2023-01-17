@@ -208,19 +208,47 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
   ## PARAMETERS
   map <- list()
   random <- NULL
-  # fixed effects
+
+  # Initial values for fixed effects
   beta_psi <- rep(0, mats$nfix_psi)
   beta_p <- rep(0, mats$nfix_p)
 
+  # Initial values for occupancy random effects
+  if(tmb_dat$U_psi_n[1] == 0){
+      gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
+      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
+      map <- c(map, list(gamma_psi = as.factor(NA), lsig_U_psi = as.factor(NA)))
+  } else {
+      gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
+      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
+      random <- c(random, "gamma_psi")
+  }
 
+  # Initial values for detection random effects
+  if(tmb_dat$U_p_n[1] == 0){
+      gamma_p <- rep(0, ncol(tmb_dat$U_p))
+      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
+      map <- c(map, list(gamma_p = as.factor(NA), lsig_U_p = as.factor(NA)))
+  } else {
+      gamma_p <- rep(0, ncol(tmb_dat$U_p))
+      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
+      random <- c(random, "gamma_p")
+  }
+
+
+  # If initial values are provided by the user
   if (!is.null(start)) {
     len <- min(length(start$beta_psi), beta_psi)
     beta_psi[1:len] <- start$beta_psi[1:len]
     len <- min(length(start$beta_p), beta_p)
     beta_p[1:len] <- start$beta_p[1:len]
+    if(!is.null(start$gamma_p)) gamma_p <- start$gamma_p
+    if(!is.null(start$gamma_psi)) gamma_psi <- start$gamma_psi
+    if(!is.null(start$lsig_U_psi)) lsig_U_psi <- start$lsig_U_psi
+    if(!is.null(start$lsig_U_p)) lsig_U_p <- start$lsig_U_p
   }
 
-  # random effects
+  # Initial values for (splines) random effects
   # occupancy
   if (is.null(mats$S_psi)) {
     z_psi <- 0
@@ -246,27 +274,7 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
     random <- c(random, "z_p")
   }
 
-  # Initial values for occupancy random effects
-  if(tmb_dat$U_psi_n[1] == 0){
-      gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
-      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
-      map <- c(map, list(gamma_psi = as.factor(NA), lsig_U_psi = as.factor(NA)))
-  } else {
-      gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
-      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
-      random <- c(random, "gamma_psi")
-  }
 
-  # Initial values for detection random effects
-  if(tmb_dat$U_p_n[1] == 0){
-      gamma_p <- rep(0, ncol(tmb_dat$U_p))
-      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
-      map <- c(map, list(gamma_p = as.factor(NA), lsig_U_p = as.factor(NA)))
-  } else {
-      gamma_p <- rep(0, ncol(tmb_dat$U_p))
-      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
-      random <- c(random, "gamma_p")
-  }
 
   if (length(map) < 1) map <- NULL
 
@@ -283,13 +291,13 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
                   lsig_U_p = lsig_U_p)
 
   ## CREATE MODEL OBJECT
-  # compile("../occuR/src/occu_tmb_re.cpp")
+  # compile("src/occu_tmb_re.cpp")
   # dyn.load(dynlib("../occuR/src/occu_tmb_re"))
   oo <- MakeADFun(data = tmb_dat,
                   parameters = tmb_par,
                   map = map,
                   random = random,
-                  DLL = "occu_tmb_test",
+                  DLL = "occu_tmb_re",
                   silent = !print)
 
   ## NORMALIZE
