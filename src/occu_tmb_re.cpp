@@ -44,13 +44,13 @@ Type objective_function<Type>::operator() ()
   PARAMETER_VECTOR(log_lambda_p); // log smoothing parameter for detection
   PARAMETER_VECTOR(gamma_psi);   // random effects for occupancy
   PARAMETER_VECTOR(gamma_p);   // random effects for detection
-  PARAMETER_VECTOR(lsig_U_psi); // log standard deviation for occupancy random effects
-  PARAMETER_VECTOR(lsig_U_p);  // log standard deviation for detection random effects
+  PARAMETER_VECTOR(lsig_gamma_psi); // log standard deviation for occupancy random effects
+  PARAMETER_VECTOR(lsig_gamma_p);  // log standard deviation for detection random effects
 
   vector<Type> lambda_psi = exp(log_lambda_psi); // smoothing parameter for occupancy
   vector<Type> lambda_p = exp(log_lambda_p); // smoothing parameter  for detection
-  vector<Type> sig_U_psi = exp(lsig_U_psi);  // standard deviation for occupancy random effects
-  vector<Type> sig_U_p = exp(lsig_U_p);  // standard deviation for occupancy random effects
+  vector<Type> sig_gamma_psi = exp(lsig_gamma_psi);  // standard deviation for occupancy random effects
+  vector<Type> sig_gamma_p = exp(lsig_gamma_p);  // standard deviation for occupancy random effects
 
   // NEGATIVE-LOG-LIKELIHOOD
   Type nll = 0;
@@ -86,7 +86,7 @@ Type objective_function<Type>::operator() ()
   if(U_psi_n(0) > 0){
       for(int i = 0; i < U_psi_n.size(); ++i){
           for(int j = 0; j < U_psi_n(i); ++j){
-              nll -= dnorm(gamma_psi(cc), Type(0.0), sig_U_psi(i));
+              nll -= dnorm(gamma_psi(cc), Type(0.0), sig_gamma_psi(i), true);
               cc += 1;
           }
       }
@@ -97,7 +97,7 @@ Type objective_function<Type>::operator() ()
   if(U_p_n(0) > 0){
       for(int i = 0; i < U_p_n.size(); ++i){
           for(int j = 0; j < U_p_n(i); ++j){
-              nll -= dnorm(gamma_p(dd), Type(0.0), sig_U_p(i));
+              nll -= dnorm(gamma_p(dd), Type(0.0), sig_gamma_p(i), true);
               dd += 1;
           }
       }

@@ -216,22 +216,22 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
   # Initial values for occupancy random effects
   if(tmb_dat$U_psi_n[1] == 0){
       gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
-      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
-      map <- c(map, list(gamma_psi = as.factor(NA), lsig_U_psi = as.factor(NA)))
+      lsig_gamma_psi <- rep(0, length(tmb_dat$U_psi_n))
+      map <- c(map, list(gamma_psi = as.factor(NA), lsig_gamma_psi = as.factor(NA)))
   } else {
       gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
-      lsig_U_psi <- rep(0, length(tmb_dat$U_psi_n))
+      lsig_gamma_psi <- rep(0, length(tmb_dat$U_psi_n))
       random <- c(random, "gamma_psi")
   }
 
   # Initial values for detection random effects
   if(tmb_dat$U_p_n[1] == 0){
       gamma_p <- rep(0, ncol(tmb_dat$U_p))
-      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
-      map <- c(map, list(gamma_p = as.factor(NA), lsig_U_p = as.factor(NA)))
+      lsig_gamma_p <- rep(0, length(tmb_dat$U_p_n))
+      map <- c(map, list(gamma_p = as.factor(NA), lsig_gamma_p = as.factor(NA)))
   } else {
       gamma_p <- rep(0, ncol(tmb_dat$U_p))
-      lsig_U_p <- rep(0, length(tmb_dat$U_p_n))
+      lsig_gamma_p <- rep(0, length(tmb_dat$U_p_n))
       random <- c(random, "gamma_p")
   }
 
@@ -244,8 +244,8 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
     beta_p[1:len] <- start$beta_p[1:len]
     if(!is.null(start$gamma_p)) gamma_p <- start$gamma_p
     if(!is.null(start$gamma_psi)) gamma_psi <- start$gamma_psi
-    if(!is.null(start$lsig_U_psi)) lsig_U_psi <- start$lsig_U_psi
-    if(!is.null(start$lsig_U_p)) lsig_U_p <- start$lsig_U_p
+    if(!is.null(start$lsig_gamma_psi)) lsig_gamma_psi <- start$lsig_gamma_psi
+    if(!is.null(start$lsig_gamma_p)) lsig_gamma_p <- start$lsig_gamma_p
   }
 
   # Initial values for (splines) random effects
@@ -287,8 +287,8 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
                   log_lambda_p = log_lambda_p,
                   gamma_psi = gamma_psi,
                   gamma_p = gamma_p,
-                  lsig_U_psi = lsig_U_psi,
-                  lsig_U_p = lsig_U_p)
+                  lsig_gamma_psi = lsig_gamma_psi,
+                  lsig_gamma_p = lsig_gamma_p)
 
   ## CREATE MODEL OBJECT
   # compile("src/occu_tmb_re.cpp")
