@@ -45,7 +45,7 @@ make_smoothing_matrix <- function(gm) {
 #' @importFrom mgcv gam uniquecombs
 #' @importFrom mgcv predict.gam
 #' @importFrom methods as
-#' @importFrom stats terms reformulate
+#' @importFrom stats terms reformulate model.matrix contrasts
 make_matrices <- function(forms, re, visit_data, site_data) {
 
     ## occupancy model
@@ -68,10 +68,11 @@ make_matrices <- function(forms, re, visit_data, site_data) {
       attr(U_psi, "index") <- attr(X_psi, "index")
       X_psi <- X_psi[,-tail(seq_len(ncol(Xfull)), sum(U_psi_n))]
       attr(X_psi, "index") <- attr(U_psi, "index")
+      U_psi <- as(U_psi, "sparseMatrix")
   } else {
       X_psi <- uniquecombs(Xfull)
       U_psi_n <- 0
-      U_psi <-  matrix(0, ncol = 1, nrow = 1) # this could be any matrix of one column
+      U_psi <- NULL
   }
 
   site_data <- site_data[, psi := NULL]
@@ -99,10 +100,11 @@ make_matrices <- function(forms, re, visit_data, site_data) {
       attr(U_p, "index") <- attr(X_p, "index")
       X_p <- X_p[, -tail(seq_len(ncol(Xfull)), sum(U_p_n))]
       attr(X_p, "index") <- attr(U_p, "index")
+      U_p <- as(U_p, "sparseMatrix")
   } else {
       X_p <- uniquecombs(Xfull)
       U_p_n <- 0
-      U_p <- matrix(0, ncol = 1, nrow = 1) # this could be any matrix of one column
+      U_p <- NULL
   }
 
   visit_data <- visit_data[, p := NULL]
@@ -120,10 +122,11 @@ make_matrices <- function(forms, re, visit_data, site_data) {
               nfix_p = gam_p$nsdf,
               gam_p = gam_p,
               gam_psi = gam_psi,
-              U_psi = as(U_psi, "sparseMatrix"),
-              U_p = as(U_p, "sparseMatrix"),
+              U_psi = U_psi,
+              U_p = U_p,
               U_psi_n = U_psi_n,
-              U_p_n = U_p_n)
+              U_p_n = U_p_n,
+              re = re)
 
   return(res)
 }
@@ -215,6 +218,7 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
 
   # Initial values for occupancy random effects
   if(tmb_dat$U_psi_n[1] == 0){
+      tmb_dat$U_psi <- as(matrix(0, ncol = 1, nrow = 1), "sparseMatrix") # this could be any matrix of one column
       gamma_psi <- rep(0, ncol(tmb_dat$U_psi))
       lsig_gamma_psi <- rep(0, length(tmb_dat$U_psi_n))
       map <- c(map, list(gamma_psi = as.factor(NA), lsig_gamma_psi = as.factor(NA)))
@@ -226,6 +230,7 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
 
   # Initial values for detection random effects
   if(tmb_dat$U_p_n[1] == 0){
+      tmb_dat$U_p <- as(matrix(0, ncol = 1, nrow = 1), "sparseMatrix") # this could be any matrix of one column
       gamma_p <- rep(0, ncol(tmb_dat$U_p))
       lsig_gamma_p <- rep(0, length(tmb_dat$U_p_n))
       map <- c(map, list(gamma_p = as.factor(NA), lsig_gamma_p = as.factor(NA)))
@@ -402,8 +407,8 @@ print.occuR <- function(obj) {
 get_predicted_values <- function(fix, ran, mats) {
   nms_fix <- names(fix)
   nms_ran <- names(ran)
-  psi_pred <- (mats$X_psi %*% c(fix[nms_fix == "beta_psi"], ran[nms_ran == "z_psi"]))
-  p_pred <- (mats$X_p %*% c(fix[nms_fix == "beta_p"], ran[nms_ran == "z_p"]))
+  psi_pred <- (cbind(mats$X_psi, mats$U_psi) %*% c(fix[nms_fix == "beta_psi"], ran[nms_ran == "z_psi"]))
+  p_pred <- (cbind(mats$X_p, mats$U_p) %*% c(fix[nms_fix == "beta_p"], ran[nms_ran == "z_p"], ran[nms_ran == "gamma_p"]))
   psi_pred <- plogis(psi_pred)
   p_pred <- plogis(p_pred)
   return(list(psi = psi_pred, p = p_pred))
@@ -421,34 +426,56 @@ get_predicted_values <- function(fix, ran, mats) {
 #' @export
 #' @importFrom mgcv rmvn
 #' @importFrom Matrix solve
+#' @importFrom stats terms reformulate model.matrix contrasts
 predict.occuR <- function(obj, visit_data, site_data, nboot = 0) {
   mats <- obj$mats
+  re <- mats$re
+
+  # Occupancy
   site_data$psi <- 1:nrow(site_data)
   mats$X_psi <- predict(mats$gam_psi, newdata = site_data, type = "lpmatrix")
+  # Add random effects
+  if(length(re[[1]]) > 0){
+      mats$U_psi <- model.matrix(as.formula(paste("psi ~", paste(re[[1]], collapse = "+"))),
+                          data = site_data,
+                          contrasts.arg = lapply(site_data[, re[[1]], with = FALSE],
+                                                 contrasts, contrasts = FALSE))
+      # Remove intercept
+      mats$U_psi <- mats$U_psi[,-1]
+  }
   site_data <- site_data[, psi := NULL]
+
+  # Detection
   visit_data$p <- 1:nrow(visit_data)
   mats$X_p <- predict(mats$gam_p, newdata = visit_data, type = "lpmatrix")
+  # Add random effects
+  if(length(re[[2]]) > 0){
+      mats$U_p <- model.matrix(as.formula(paste("p ~", paste(re[[2]], collapse = "+"))),
+                               data = visit_data,
+                               contrasts.arg = lapply(visit_data[, re[[2]], with = FALSE],
+                                                      contrasts, contrasts = FALSE))
+      # Remove intercept
+      mats$U_p <- mats$U_p[,-1]
+  }
   visit_data <- visit_data[, p := NULL]
+
   fix <- obj$res$par.fixed
   ran <- obj$res$par.random
   pred <- get_predicted_values(fix, ran, mats)
   if (nboot > 0.5) {
     Q <- obj$res$jointPrecision
     if (!is.null(Q)) {
-      Q <- Q[!grepl("log_lambda_", colnames(Q)),
-             !grepl("log_lambda_", colnames(Q)), drop = FALSE]
+      Q <- Q[!grepl("log_lambda_|lsig_gamma_", colnames(Q)),
+             !grepl("log_lambda_|lsig_gamma_", colnames(Q)), drop = FALSE]
       V <- solve(Q)
     } else {
       V <- obj$res$cov.fixed
     }
-    Q <- Q[!grepl("log_lambda_", colnames(Q)),
-           !grepl("log_lambda_", colnames(Q)), drop = FALSE]
-    V <- solve(Q)
     param <- c(fix, ran)
-    param <- param[!grepl("log_lambda", names(param))]
+    param <- param[!grepl("log_lambda|lsig_gamma_", names(param))]
     boots <- rmvn(nboot, param, V)
     colnames(boots) <- names(param)
-    nfix <- length(fix[!grepl("log_lambda", names(fix))])
+    nfix <- length(fix[!grepl("log_lambda|lsig_gamma_", names(fix))])
     boots_psi <- matrix(0, nr = nboot, nc = length(pred$psi))
     boots_p <- matrix(0, nr = nboot, nc = length(pred$p))
     for (b in 1:nboot) {
