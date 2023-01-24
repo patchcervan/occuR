@@ -4,7 +4,14 @@
 \alias{predict.occuR}
 \title{Predict from fitted occupancy model}
 \usage{
-\method{predict}{occuR}(obj, visit_data, site_data, nboot = 0)
+\method{predict}{occuR}(
+  obj,
+  visit_data,
+  site_data,
+  include_re = TRUE,
+  new_levels = FALSE,
+  nboot = 0
+)
 }
 \arguments{
 \item{obj}{fitted model object from fit_occu}
@@ -12,6 +19,16 @@
 \item{visit_data}{see fit_occu}
 
 \item{site_data}{see fit_occu}
+
+\item{include_re}{Logical indicating whether random effects contributions should
+be included in the predictions. If TRUE (default) they are included, if FALSE
+they are not (producing "population-level" predictions).}
+
+\item{new_levels}{If TRUE, then new levels in the random effects are allowed, and
+they will be sampled from the corresponding distribution. If there is a mix of
+old and new levels, model estimates will be used for the old levels. If FALSE
+(default), and `include_re == TRUE` then the function will exit with an error
+if new levels are present.}
 
 \item{nboot}{number of parametric bootstrap resamples to produce from fitted model}
 }

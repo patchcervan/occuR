@@ -161,32 +161,29 @@ fit_occu <- function(forms, visit_data, site_data, start = NULL, print = TRUE) {
   nvisit <- nvis$nvisit
   nobs <- nrow(visit_data)
 
-  ## Extract random effects from model formulas
-  re <- lapply(lapply(forms, terms), labels)
-  which_re <- lapply(re, function(x) grep("\\|", x))
-  re <- lapply(re, function(x) x[grep("\\|", x)])
-  re <- lapply(re, function(x) gsub(" ", "", x)) # remove spaces
-  re <- lapply(re, function(x) gsub("*.\\|", "", x))
-
-  re_vals <- list(psi = NULL,
-                  p = NULL)
-
-  for(i in seq_along(forms)){
-      if(length(which_re[[i]]) != 0){
-          tt <- labels(terms(forms[[i]]))[-which_re[[i]]]
-          forms[[i]] <- reformulate(tt,
-                                    response = c("psi", "p")[i],
-                                    intercept = attr(terms(forms[[i]]), "intercept"))
-      }
-  }
-
-  ## MODEL MATRICES
   # name formulae
   names(forms) <- c(as.character(forms[[1]][[2]]),
                     as.character(forms[[2]][[2]]))
 
+  ## Extract random effects from model formulas
+  re <- extract_re_terms(forms, site_data, visit_data)
+
+  # remove random effects from forms
+  forms_fix <- forms
+  for(i in seq_along(forms)){
+      if(length(re[[i]]) > 0){
+          tt <- labels(terms(forms[[i]]))
+          tt <- tt[-grep(paste(re[[i]], collapse = "|"), tt)]
+          forms_fix[[i]] <- reformulate(tt,
+                                        response = c("psi", "p")[i],
+                                        intercept = attr(terms(forms[[i]]), "intercept"))
+      }
+  }
+
+  ## MODEL MATRICES
+
   # get model matrices and smoothing matrices
-  mats <- make_matrices(forms, re, visit_data, site_data)
+  mats <- make_matrices(forms_fix, re, visit_data, site_data)
 
   ## SETUP DATA FOR TMB
   tmb_dat <- list(flag = 1L,
@@ -407,7 +404,7 @@ print.occuR <- function(obj) {
 get_predicted_values <- function(fix, ran, mats) {
   nms_fix <- names(fix)
   nms_ran <- names(ran)
-  psi_pred <- (cbind(mats$X_psi, mats$U_psi) %*% c(fix[nms_fix == "beta_psi"], ran[nms_ran == "z_psi"]))
+  psi_pred <- (cbind(mats$X_psi, mats$U_psi) %*% c(fix[nms_fix == "beta_psi"], ran[nms_ran == "z_psi"], ran[nms_ran == "gamma_psi"]))
   p_pred <- (cbind(mats$X_p, mats$U_p) %*% c(fix[nms_fix == "beta_p"], ran[nms_ran == "z_p"], ran[nms_ran == "gamma_p"]))
   psi_pred <- plogis(psi_pred)
   p_pred <- plogis(p_pred)
@@ -419,6 +416,14 @@ get_predicted_values <- function(fix, ran, mats) {
 #' @param obj fitted model object from fit_occu
 #' @param visit_data see fit_occu
 #' @param site_data see fit_occu
+#' @param include_re Logical indicating whether random effects contributions should
+#' be included in the predictions. If TRUE (default) they are included, if FALSE
+#' they are not (producing "population-level" predictions).
+#' @param new_levels If TRUE, then new levels in the random effects are allowed, and
+#' they will be sampled from the corresponding distribution. If there is a mix of
+#' old and new levels, model estimates will be used for the old levels. If FALSE
+#' (default), and `include_re == TRUE` then the function will exit with an error
+#' if new levels are present.
 #' @param nboot number of parametric bootstrap resamples to produce from fitted model
 #'
 #' @return if nboot = 0 (default), the list of fitted psi and p values; otherwise, list also
@@ -427,66 +432,53 @@ get_predicted_values <- function(fix, ran, mats) {
 #' @importFrom mgcv rmvn
 #' @importFrom Matrix solve
 #' @importFrom stats terms reformulate model.matrix contrasts
-predict.occuR <- function(obj, visit_data, site_data, nboot = 0) {
-  mats <- obj$mats
-  re <- mats$re
+predict.occuR <- function(obj, visit_data, site_data, include_re = TRUE,
+                          new_levels = FALSE, nboot = 0) {
+    mats <- obj$mats
+    re <- mats$re
 
-  # Occupancy
-  site_data$psi <- 1:nrow(site_data)
-  mats$X_psi <- predict(mats$gam_psi, newdata = site_data, type = "lpmatrix")
-  # Add random effects
-  if(length(re[[1]]) > 0){
-      mats$U_psi <- model.matrix(as.formula(paste("psi ~", paste(re[[1]], collapse = "+"))),
-                          data = site_data,
-                          contrasts.arg = lapply(site_data[, re[[1]], with = FALSE],
-                                                 contrasts, contrasts = FALSE))
-      # Remove intercept
-      mats$U_psi <- mats$U_psi[,-1]
-  }
-  site_data <- site_data[, psi := NULL]
+    # Occupancy fixed effect design matrix
+    site_data$psi <- 1:nrow(site_data)
+    mats$X_psi <- predict(mats$gam_psi, newdata = site_data, type = "lpmatrix")
 
-  # Detection
-  visit_data$p <- 1:nrow(visit_data)
-  mats$X_p <- predict(mats$gam_p, newdata = visit_data, type = "lpmatrix")
-  # Add random effects
-  if(length(re[[2]]) > 0){
-      mats$U_p <- model.matrix(as.formula(paste("p ~", paste(re[[2]], collapse = "+"))),
-                               data = visit_data,
-                               contrasts.arg = lapply(visit_data[, re[[2]], with = FALSE],
-                                                      contrasts, contrasts = FALSE))
-      # Remove intercept
-      mats$U_p <- mats$U_p[,-1]
-  }
-  visit_data <- visit_data[, p := NULL]
-
-  fix <- obj$res$par.fixed
-  ran <- obj$res$par.random
-  pred <- get_predicted_values(fix, ran, mats)
-  if (nboot > 0.5) {
-    Q <- obj$res$jointPrecision
-    if (!is.null(Q)) {
-      Q <- Q[!grepl("log_lambda_|lsig_gamma_", colnames(Q)),
-             !grepl("log_lambda_|lsig_gamma_", colnames(Q)), drop = FALSE]
-      V <- solve(Q)
-    } else {
-      V <- obj$res$cov.fixed
+    # Add random effects design matrix
+    if(length(re[[1]]) > 0){
+        mats$U_psi <- model.matrix(as.formula(paste("psi ~", paste(re[[1]], collapse = "+"))),
+                                   data = site_data,
+                                   contrasts.arg = lapply(site_data[, re[[1]], with = FALSE],
+                                                          contrasts, contrasts = FALSE))
+        # Remove intercept
+        mats$U_psi <- mats$U_psi[,-1]
+        mats$U_psi_n <- sapply(site_data[, re[[1]], with = FALSE], nlevels)
     }
-    param <- c(fix, ran)
-    param <- param[!grepl("log_lambda|lsig_gamma_", names(param))]
-    boots <- rmvn(nboot, param, V)
-    colnames(boots) <- names(param)
-    nfix <- length(fix[!grepl("log_lambda|lsig_gamma_", names(fix))])
-    boots_psi <- matrix(0, nr = nboot, nc = length(pred$psi))
-    boots_p <- matrix(0, nr = nboot, nc = length(pred$p))
-    for (b in 1:nboot) {
-      boot_res <- get_predicted_values(boots[b, 1:nfix], boots[b, -(1:nfix)], mats)
-      boots_psi[b,] <- boot_res$psi
-      boots_p[b,] <- boot_res$p
+    site_data <- site_data[, psi := NULL]
+
+    # Detection
+    visit_data$p <- 1:nrow(visit_data)
+    mats$X_p <- predict(mats$gam_p, newdata = visit_data, type = "lpmatrix")
+
+    # Add random effects
+    if(length(re[[2]]) > 0){
+        mats$U_p <- model.matrix(as.formula(paste("p ~", paste(re[[2]], collapse = "+"))),
+                                 data = visit_data,
+                                 contrasts.arg = lapply(visit_data[, re[[2]], with = FALSE],
+                                                        contrasts, contrasts = FALSE))
+        # Remove intercept
+        mats$U_p <- mats$U_p[,-1]
+        mats$U_p_n <- sapply(visit_data[, re[[2]], with = FALSE], nlevels)
     }
-    pred$psiboot <- boots_psi
-    pred$pboot <- boots_p
-  }
-  return(pred)
+    visit_data <- visit_data[, p := NULL]
+
+    if(include_re && new_levels){
+        preds <- pred_mix_re(re, site_data, visit_data, mats, nboot)
+    } else if(include_re && !new_levels){
+        preds <- pred_re(obj, mats, nboot)
+    } else if(!include_re){
+        preds <- pred_no_re(obj, mats, nboot)
+    }
+
+    return(preds)
+
 }
 
 #' Compute estimated degrees of freedom for a spline
@@ -552,8 +544,286 @@ logLik.occuR <- function(object, ...) {
 }
 
 
+#' Extract random effects from formulas
+#'
+#' @param forms list of formulae for psi (occupancy) and p (detection)
+#' @param visit_data data.table with row for each visit with a "obs" column for detection record
+#' @param site_data data.table with row for each site x occasion
+#' @return A list with names of random effects variables as per `forms`. The
+#' levels of the random effects variables present in the data are returned as
+#' attributes.
+#' @export
+#' @keywords internal
+#' @noRd
+extract_re_terms <- function(forms, site_data, visit_data){
+
+    re <- lapply(lapply(forms, terms), labels)
+    re <- lapply(re, function(x) x[grep("\\|", x)])
+    re <- lapply(re, function(x) gsub(" ", "", x)) # remove spaces
+    re <- lapply(re, function(x) gsub("*.\\|", "", x))
+
+    # Extract levels for occupancy re
+    for(i in seq_along(re[[1]])){
+        attr(re[[1]], re[[1]][i]) <- levels(site_data[, get(re[[1]][i])])
+    }
+    # Extract levels for detection re
+    for(i in seq_along(re[[2]])){
+        attr(re[[2]], re[[2]][i]) <- levels(visit_data[, get(re[[2]][i])])
+    }
+
+    return(re)
+}
 
 
+#' Population-level predictions from fitted mixed-effects occupancy model
+#'
+#' @description This applies for population level predictions. No known random effects for the present levels.
+#' @param obj fitted model object from fit_occu
+#' @param mats Model matrices
+#' @param nboot number of parametric bootstrap resamples to produce from fitted model
+#'
+#' @return if nboot = 0 (default), the list of fitted psi and p values; otherwise, list also
+#' contains matrix for psi and p where each row is a bootstrap resample
+#' @export
+#' @keywords internal
+#' @noRd
+#' @importFrom mgcv rmvn
+#' @importFrom Matrix solve
+#' @importFrom stats terms reformulate model.matrix contrasts
+pred_no_re <- function(obj, mats, nboot){
 
+    fix <- obj$res$par.fixed
+    ran <- NULL
+    if(sum(unlist(mats$U_psi_n)) > 0){
+        ran <- c(ran, rep(0, sum(unlist(mats$U_psi_n))))
+    }
+    if(sum(unlist(mats$U_p_n)) > 0){
+        ran <- c(ran, rep(0, sum(unlist(mats$U_p_n))))
+    }
+
+    names(ran) <- c(rep(c("gamma_psi"), sum(unlist(mats$U_psi_n))),
+                    rep(c("gamma_p"), sum(unlist(mats$U_p_n))))
+
+    # ran <- obj$res$par.random
+    pred <- get_predicted_values(fix, ran, mats)
+
+    if (nboot > 0.5) {
+        Q <- obj$res$jointPrecision
+        if (!is.null(Q)) {
+            Q <- Q[!grepl("log_lambda_|^gamma_", colnames(Q)),
+                   !grepl("log_lambda_|^gamma_", colnames(Q)), drop = FALSE]
+            V <- solve(Q)
+        } else {
+            V <- obj$res$cov.fixed
+        }
+        param <- c(fix, ran)
+        param <- param[!grepl("log_lambda|^gamma_", names(param))]
+        boots <- rmvn(nboot, param, V)
+        colnames(boots) <- names(param)
+        nfix <- length(fix[!grepl("log_lambda|gamma_", names(fix))])
+
+        boots_psi <- matrix(0, nr = nboot, nc = length(pred$psi))
+        boots_p <- matrix(0, nr = nboot, nc = length(pred$p))
+
+
+        for (b in 1:nboot) {
+            ran <- NULL
+            gamma_psi <- NULL
+            for(i in seq_along(mats$U_psi_n)){
+                sig_psi <- exp(boots[b, colnames(boots) == "lsig_gamma_psi"][i]) + 1e-10 # to avoid zero sd
+                gamma_psi <- c(gamma_psi, rnorm(mats$U_psi_n[i], 0, sig_psi))
+            }
+            ran <- c(ran, gamma_psi)
+            gamma_p <- NULL
+            for(i in seq_along(mats$U_p_n)){
+                sig_p <- exp(boots[b, colnames(boots) == "lsig_gamma_p"][i]) + 1e-10 # to avoid zero sd
+                gamma_p <- c(gamma_p, rnorm(mats$U_p_n[i], 0, sig_p))
+            }
+            ran <- c(ran, gamma_p)
+            names(ran) <- c(rep(c("gamma_psi"), sum(unlist(mats$U_psi_n))),
+                            rep(c("gamma_p"), sum(unlist(mats$U_p_n))))
+            boot_res <- get_predicted_values(boots[b, 1:nfix], ran, mats)
+            boots_psi[b,] <- boot_res$psi
+            boots_p[b,] <- boot_res$p
+        }
+        pred$psiboot <- boots_psi
+        pred$pboot <- boots_p
+    }
+    return(pred)
+}
+
+
+#' Factor-level predictions from fitted mixed-effects occupancy model
+#'
+#' @description This applies for known random effects levels.
+#' @param obj fitted model object from fit_occu
+#' @param mats Model matrices
+#' @param nboot number of parametric bootstrap resamples to produce from fitted model
+#'
+#' @return if nboot = 0 (default), the list of fitted psi and p values; otherwise, list also
+#' contains matrix for psi and p where each row is a bootstrap resample
+#' @export
+#' @keywords internal
+#' @noRd
+#' @importFrom mgcv rmvn
+#' @importFrom Matrix solve
+#' @importFrom stats terms reformulate model.matrix contrasts
+pred_re <- function(obj, mats, nboot){
+
+    fix <- obj$res$par.fixed
+    ran <- obj$res$par.random
+    pred <- get_predicted_values(fix, ran, mats)
+
+    if (nboot > 0.5) {
+        Q <- obj$res$jointPrecision
+        if (!is.null(Q)) {
+            Q <- Q[!grepl("log_lambda_|lsig_gamma_", colnames(Q)),
+                   !grepl("log_lambda_|lsig_gamma_", colnames(Q)), drop = FALSE]
+            V <- solve(Q)
+        } else {
+            V <- obj$res$cov.fixed
+        }
+        param <- c(fix, ran)
+        param <- param[!grepl("log_lambda|lsig_gamma_", names(param))]
+        boots <- rmvn(nboot, param, V)
+        colnames(boots) <- names(param)
+        nfix <- length(fix[!grepl("log_lambda|lsig_gamma_", names(fix))])
+        boots_psi <- matrix(0, nr = nboot, nc = length(pred$psi))
+        boots_p <- matrix(0, nr = nboot, nc = length(pred$p))
+        for (b in 1:nboot) {
+            boot_res <- get_predicted_values(boots[b, 1:nfix], boots[b, -(1:nfix)], mats)
+            boots_psi[b,] <- boot_res$psi
+            boots_p[b,] <- boot_res$p
+        }
+        pred$psiboot <- boots_psi
+        pred$pboot <- boots_p
+    }
+
+    return(pred)
+}
+
+#' Factor-level and population predictions from fitted mixed-effects occupancy model
+#'
+#' @description This applies when we want factor-level predictions, but there
+#' are new levels that we need to sample from the corresponding distribution of random effects.
+#' @param re A list with two character vectors with the names of the variables with random
+#' effects for occupancy and detection respectively.
+#' @param visit_data data.table with row for each visit with a "obs" column for detection record
+#' @param site_data data.table with row for each site x occasion
+#' @param mats Model matrices
+#' @param nboot number of parametric bootstrap resamples to produce from fitted model
+#'
+#' @return if nboot = 0 (default), the list of fitted psi and p values; otherwise, list also
+#' contains matrix for psi and p where each row is a bootstrap resample
+#' @export
+#' @keywords internal
+#' @noRd
+#' @importFrom mgcv rmvn
+#' @importFrom Matrix solve
+#' @importFrom stats terms reformulate model.matrix contrasts
+pred_mix_re <- function(re, site_data, visit_data, mats, nboot){
+
+    # Separate random effects levels for occupancy
+    if(length(re[[1]]) > 0){
+        olds <- unlist(lapply(re[[1]], function(x) paste0(x, attr(re[[1]], x))))
+        news <- unlist(lapply(re[[1]], function(x) paste0(x, levels(site_data[, get(x)]))))
+        tot <- unique(c(olds, news))
+        re_psi <- data.frame(levels = tot,
+                             old = tot %in% olds,
+                             new = tot %in% news,
+                             param = "gamma_psi")
+        re_psi$var <- stringr::str_extract(re_psi$levels, paste(unlist(re), collapse = "|"))
+        re_psi <- re_psi[order(nchar(re_psi$levels), re_psi$levels),]
+    }
+
+    # Separate random effects levels for detection
+    if(length(re[[2]]) > 0){
+        olds <- unlist(lapply(re[[2]], function(x) paste0(x, attr(re[[2]], x))))
+        news <- unlist(lapply(re[[2]], function(x) paste0(x, levels(visit_data[, get(x)]))))
+        tot <- unique(c(olds, news))
+        re_p <- data.frame(levels = tot,
+                           old = tot %in% olds,
+                           new = tot %in% news,
+                           param = "gamma_p")
+        re_p$var <- stringr::str_extract(re_p$levels, paste(unlist(re), collapse = "|"))
+        re_p <- re_p[order(nchar(re_p$levels), re_p$levels),]
+    }
+
+    re_df <- rbind(re_psi, re_p)
+    re_df$id <- paste(re_df$levels, re_df$param, sep = ".")
+    re_df$var.proc <- paste(re_df$var, re_df$param, sep = ".")
+
+    # model parameters
+    fix <- obj$res$par.fixed
+    ran <- obj$res$par.random
+    attr(ran, "old_names") <- names(ran)
+    names(ran) <- re_df[re_df$old == TRUE, "id"]
+
+
+    # I need a vector of random param
+    rdm <- rep(NA, nrow(re_df[re_df$new == TRUE, ]))
+    names(rdm) <-  re_df[re_df$new == TRUE, "id"]
+    common <- re_df[re_df$new == TRUE & re_df$old == TRUE, "id"]
+    rdm[common] <- ran[common]
+    attr(rdm, "missing") <- which(is.na(rdm))
+
+    names(rdm) <- re_df[re_df$id %in% names(rdm), "param"]
+    rdm[is.na(rdm)] <- 0
+    pred <- get_predicted_values(fix, rdm, mats)
+
+    nfix <- mats$nfix_psi + mats$nfix_p
+    keep <- c(rep(TRUE, nfix),   # fixed effects to keep
+              re_df[re_df$old == TRUE, "id"] %in% common,  # random effect levels to keep
+              unique(re_df$var.proc) %in% (re_df$var.proc[re_df$old == FALSE & re_df$new == TRUE])) # random effects sds to keep
+    names(ran) <- attr(ran, "old_names")
+
+    if (nboot > 0.5) {
+        Q <- obj$res$jointPrecision
+        # For fixed effects and random effects SD
+        if (!is.null(Q)) {
+            Qf <- Q[!grepl("log_lambda_", colnames(Q)),
+                    !grepl("log_lambda_", colnames(Q)), drop = FALSE]
+            Qf <- Qf[keep, keep]
+            Vf <- solve(Qf)
+        } else {
+            Vf <- obj$res$cov.fixed
+        }
+
+        # Combine fixed and random effects and remove not needed sds
+        param <- c(fix[c(rep(TRUE, nfix),
+                         unique(re_df$var.proc) %in% (re_df$var.proc[re_df$old == FALSE & re_df$new == TRUE]))],
+                   ran[re_df[re_df$old == TRUE, "id"] %in% common])
+        # Reorder
+        param <- c(param[!grepl("lsig_", names(param))],
+                   param[grepl("lsig_", names(param))])
+        param <- param[!grepl("log_lambda", names(param))]
+        boots <- rmvn(nboot, param, Vf)
+        colnames(boots) <- names(param)
+
+        boots_psi <- matrix(0, nr = nboot, nc = length(pred$psi))
+        boots_p <- matrix(0, nr = nboot, nc = length(pred$p))
+
+        n_samples <- unique(paste0(re_df$var, ".*", re_df$param, "$"))
+        n_samples <- sapply(lapply(n_samples, grep, names(attr(rdm, "missing"))), length)
+        to_sample <- colnames(boots)[grep("lsig", colnames(boots))]
+
+        for (b in 1:nboot) {
+            gamma_new <- NULL
+            for(i in seq_along(to_sample)){
+                sig_psi <- exp(boots[b, colnames(boots) == to_sample[i]]) + 1e-10 # to avoid zero sd
+                gamma_new <- c(gamma_new, rnorm(n_samples[i], 0, sig_psi))
+            }
+            rdm[attr(rdm, "missing")] <- gamma_new
+            boot_res <- get_predicted_values(boots[b, 1:nfix], rdm, mats)
+            boots_psi[b,] <- boot_res$psi
+            boots_p[b,] <- boot_res$p
+        }
+        pred$psiboot <- boots_psi
+        pred$pboot <- boots_p
+    }
+
+    return(pred)
+
+}
 
 
