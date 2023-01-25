@@ -62,15 +62,27 @@ make_matrices <- function(forms, re, visit_data, site_data) {
                           contrasts.arg = lapply(site_data[, re[[1]], with = FALSE],
                                                  contrasts, contrasts = FALSE))
       Xfull <- cbind(Xfull, Xre[,-1])
+      # Add site and occasion
+      Xfull <- cbind(as.matrix(site_data[,c("site", "occasion")]), Xfull)
       U_psi_n <- sapply(site_data[, re[[1]], with = FALSE], nlevels)
       X_psi <- uniquecombs(Xfull)
+      attr <- list(index = attr(X_psi, "index"),
+                   site = as.vector(X_psi[,1]),
+                   occasion = as.vector(X_psi[,2]))
       U_psi <- X_psi[,tail(seq_len(ncol(Xfull)), sum(U_psi_n))]
-      attr(U_psi, "index") <- attr(X_psi, "index")
       X_psi <- X_psi[,-tail(seq_len(ncol(Xfull)), sum(U_psi_n))]
-      attr(X_psi, "index") <- attr(U_psi, "index")
+      X_psi <- X_psi[,-(1:2)]
+      attributes(X_psi) <- c(attributes(X_psi), attr)
       U_psi <- as(U_psi, "sparseMatrix")
   } else {
+      # Add site and occasion
+      Xfull <- cbind(as.matrix(site_data[,c("site", "occasion")]), Xfull)
       X_psi <- uniquecombs(Xfull)
+      attr <- list(index = attr(X_psi, "index"),
+                   site = as.vector(X_psi[,1]),
+                   occasion = as.vector(X_psi[,2]))
+      attributes(X_psi) <- c(attributes(X_psi), attr)
+      X_psi <- X_psi[,-(1:2)]
       U_psi_n <- 0
       U_psi <- NULL
   }
@@ -94,15 +106,29 @@ make_matrices <- function(forms, re, visit_data, site_data) {
                           contrasts.arg = lapply(visit_data[, re[[2]], with = FALSE],
                                                  contrasts, contrasts = FALSE))
       Xfull <- cbind(Xfull, Xre[,-1])
+      # Add site, occasion and visit
+      Xfull <- cbind(as.matrix(visit_data[,c("site", "occasion", "visit")]), Xfull)
       U_p_n <- sapply(visit_data[, re[[2]], with = FALSE], nlevels)
       X_p <- uniquecombs(Xfull)
-      U_p <- X_p[, tail(seq_len(ncol(Xfull)), sum(U_p_n))]
-      attr(U_p, "index") <- attr(X_p, "index")
-      X_p <- X_p[, -tail(seq_len(ncol(Xfull)), sum(U_p_n))]
-      attr(X_p, "index") <- attr(U_p, "index")
+      attr <- list(index = attr(X_p, "index"),
+                   site = as.vector(X_p[,1]),
+                   occasion = as.vector(X_p[,2]),
+                   visit = as.vector(X_p[,3]))
+      U_p <- X_p[,tail(seq_len(ncol(Xfull)), sum(U_p_n))]
+      X_p <- X_p[,-tail(seq_len(ncol(Xfull)), sum(U_p_n))]
+      X_p <- X_p[,-(1:3)]
+      attributes(X_p) <- c(attributes(X_p), attr)
       U_p <- as(U_p, "sparseMatrix")
   } else {
+      # Add site, occasion and visit
+      Xfull <- cbind(as.matrix(visit_data[,c("site", "occasion", "visit")]), Xfull)
       X_p <- uniquecombs(Xfull)
+      attr <- list(index = attr(X_p, "index"),
+                   site = as.vector(X_p[,1]),
+                   occasion = as.vector(X_p[,2]),
+                   visit = as.vector(X_p[,3]))
+      X_p <- X_p[,-(1:3)]
+      attributes(X_p) <- c(attributes(X_p), attr)
       U_p_n <- 0
       U_p <- NULL
   }
