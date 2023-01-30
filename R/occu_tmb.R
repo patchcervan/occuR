@@ -81,8 +81,8 @@ make_matrices <- function(forms, re, visit_data, site_data) {
       attr <- list(index = attr(X_psi, "index"),
                    site = as.vector(X_psi[,1]),
                    occasion = as.vector(X_psi[,2]))
-      attributes(X_psi) <- c(attributes(X_psi), attr)
       X_psi <- X_psi[,-(1:2)]
+      attributes(X_psi) <- c(attributes(X_psi), attr)
       U_psi_n <- 0
       U_psi <- NULL
   }
@@ -140,7 +140,8 @@ make_matrices <- function(forms, re, visit_data, site_data) {
 
 
   ## results
-  res <- list(X_psi = X_psi,
+  res <- list(y = visit_data$obs,
+              X_psi = X_psi,
               S_psi = S_psi,
               nfix_psi = gam_psi$nsdf,
               X_p = X_p,
@@ -496,7 +497,7 @@ predict.occuR <- function(obj, visit_data, site_data, include_re = TRUE,
     visit_data <- visit_data[, p := NULL]
 
     if(include_re && new_levels){
-        preds <- pred_mix_re(re, site_data, visit_data, mats, nboot)
+        preds <- pred_mix_re(obj, re, site_data, visit_data, mats, nboot)
     } else if(include_re && !new_levels){
         preds <- pred_re(obj, mats, nboot)
     } else if(!include_re){
@@ -732,6 +733,7 @@ pred_re <- function(obj, mats, nboot){
 #'
 #' @description This applies when we want factor-level predictions, but there
 #' are new levels that we need to sample from the corresponding distribution of random effects.
+#' @param obj fitted model object from fit_occu
 #' @param re A list with two character vectors with the names of the variables with random
 #' effects for occupancy and detection respectively.
 #' @param visit_data data.table with row for each visit with a "obs" column for detection record
@@ -747,7 +749,7 @@ pred_re <- function(obj, mats, nboot){
 #' @importFrom mgcv rmvn
 #' @importFrom Matrix solve
 #' @importFrom stats terms reformulate model.matrix contrasts
-pred_mix_re <- function(re, site_data, visit_data, mats, nboot){
+pred_mix_re <- function(obj, re, site_data, visit_data, mats, nboot){
 
     # Separate random effects levels for occupancy
     if(length(re[[1]]) > 0){
